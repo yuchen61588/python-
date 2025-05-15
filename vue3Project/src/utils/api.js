@@ -8,15 +8,16 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
-});
+}); //api实例 配置默认请求参数
 
-// 请求拦截器 - 添加认证Token
+// 请求拦截器 - 添加认证Token 回
 api.interceptors.request.use(
+  //请求配置对象
   (config) => {
-    const token = localStorage.getItem("token");
+    const token = localStorage.getItem("token"); //检查loaclStorage是否存在token
     if (token) {
-      config.headers["Authorization"] = `Token ${token}`;
-    }
+      config.headers["Authorization"] = `Token ${token}`; //发送到config字段
+    } //后端验证身份
     console.log("请求配置:", config);
     return config;
   },
@@ -36,10 +37,11 @@ api.interceptors.response.use(
 );
 
 // 用户相关API
+//注册请求
 export const register = async (userData) => {
   console.log("注册请求数据:", userData);
   try {
-    const response = await api.post("/register/", userData);
+    const response = await api.post("/register/", userData); //读出数据，让异步像同步，等到response回复才进行下面
     console.log("注册成功:", response.data);
     return response;
   } catch (error) {
@@ -47,20 +49,20 @@ export const register = async (userData) => {
     throw error;
   }
 };
-
+//登录请求
 export const login = async (credentials) => {
   console.log("登录请求数据:", credentials);
   return api.post("/login/", credentials);
 };
-
+//获得用户文件
 export const getUserProfile = async () => {
   return api.get("/profile/");
 };
 
 // 数据文件相关API
 export const uploadFile = async (file, name, description) => {
-  const formData = new FormData();
-  formData.append("file", file);
+  const formData = new FormData(); //创建一个表单数据对象，类似于FROE表单就不需要再里面绑定
+  formData.append("file", file); //添加键值对
   formData.append("name", name || file.name);
   formData.append("description", description || "");
   formData.append("file_type", file.type);
@@ -77,7 +79,7 @@ export const getDataFiles = async () => {
 };
 
 export const getDataFilePreview = async (fileId) => {
-  return api.get(`/datafiles/${fileId}/preview/`);
+  return api.get(`/datafiles/${fileId}/preview/`); //获取特定文件的预览信息。
 };
 
 // 数据清洗相关API
@@ -86,19 +88,19 @@ export const cleanData = async (fileId, cleaningMethod, parameters) => {
     file_id: fileId,
     cleaning_method: cleaningMethod,
     parameters,
-  });
+  }); //数据清洗
 };
 
 export const getCleanedDataList = async () => {
-  return api.get("/cleaneddata/");
+  return api.get("/cleaneddata/"); //得到清洗后的数据
 };
 
 // 数据分析相关API
 export const runAnalysis = async (
-  fileId,
-  cleanedDataId,
-  analysisType,
-  parameters
+  fileId, //数据文件ID
+  cleanedDataId, //清洗后的数据 ID
+  analysisType, //分析类型
+  parameters //分析所需的参数
 ) => {
   const requestData = {
     file_id: fileId,
@@ -146,7 +148,7 @@ export const createVisualization = async (
     title,
     configuration,
   });
-};
+}; //创建可视化
 
 export const getVisualizations = async () => {
   return api.get("/visualizations/");
@@ -160,4 +162,4 @@ export const exportData = async (fileId, format = "csv") => {
   });
 };
 
-export default api;
+export default api;//导出

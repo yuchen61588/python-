@@ -1,307 +1,314 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { useAuthStore, useDataStore } from '../stores/index'
-import { login, register, getDataFiles } from '../utils/api'
-import { ElMessage } from 'element-plus'
+import { ref, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
+import { useAuthStore, useDataStore } from "../stores/index";
+import { login, register, getDataFiles } from "../utils/api";
+import { ElMessage } from "element-plus";
 
-const router = useRouter()
-const authStore = useAuthStore()
-const dataStore = useDataStore()
+const router = useRouter(); //路由
+const authStore = useAuthStore(); //存储用户信息piaia
+const dataStore = useDataStore(); //存储用户的文件信息
 
-const activeTab = ref('login')
-const loading = ref(false)
-const dataFiles = ref([])
+const activeTab = ref("login");
+const loading = ref(false); //loading图标
+const dataFiles = ref([]); //文件列表参数
 
 // 登录表单
 const loginForm = ref({
-  username: '',
-  password: ''
-})
+  username: "",
+  password: "",
+});
 
 // 注册表单
 const registerForm = ref({
-  username: '',
-  email: '',
-  password: '',
-  confirmPassword: ''
-})
+  username: "",
+  email: "",
+  password: "",
+  confirmPassword: "",
+});
 
 // 登录规则
 const loginRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' }
-  ]
-}
+  username: [{ required: true, message: "请输入用户名", trigger: "blur" }],
+  password: [{ required: true, message: "请输入密码", trigger: "blur" }],
+};
 
 // 注册规则
 const registerRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' }
-  ],
+  username: [{ required: true, message: "请输入用户名", trigger: "blur" }],
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
+    { required: true, message: "请输入邮箱", trigger: "blur" },
+    { type: "email", message: "请输入正确的邮箱格式", trigger: "blur" },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度至少为6个字符', trigger: 'blur' }
+    { required: true, message: "请输入密码", trigger: "blur" },
+    { min: 6, message: "密码长度至少为6个字符", trigger: "blur" },
   ],
   confirmPassword: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
-    { 
+    { required: true, message: "请确认密码", trigger: "blur" },
+    {
       validator: (rule, value, callback) => {
         if (value !== registerForm.value.password) {
-          callback(new Error('两次输入的密码不一致'))
+          callback(new Error("两次输入的密码不一致"));
         } else {
-          callback()
+          callback();
         }
-      }, 
-      trigger: 'blur' 
-    }
-  ]
-}
+      },
+      trigger: "blur",
+    },
+  ],
+};
 
 // 判断是否已登录
-const isLoggedIn = computed(() => authStore.isAuthenticated)
-const username = computed(() => authStore.username)
+const isLoggedIn = computed(() => authStore.isAuthenticated); //计算属性
+const username = computed(() => authStore.username);
 
 // 处理登录
 const handleLogin = async (formEl) => {
-  if (!formEl) return
-  
+  if (!formEl) return;
+
   await formEl.validate(async (valid) => {
+    //规则展示
     if (valid) {
-      loading.value = true
-      
+      loading.value = true;
+
       // 直接添加调试输出
       const credentials = {
         username: loginForm.value.username,
-        password: loginForm.value.password
-      }
-      console.log('===准备发送登录请求===', credentials)
-      
+        password: loginForm.value.password,
+      };
+      console.log("===准备发送登录请求===", credentials); //调式输出
+
       try {
         // 使用更直接的fetch调用
-        const directResponse = await fetch('http://localhost:8000/api/login/', {
-          method: 'POST',
+        const directResponse = await fetch("http://localhost:8000/api/login/", {
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify(credentials)
-        })
-        
-        const responseData = await directResponse.json()
-        console.log('===登录响应数据===', responseData)
-        
+          body: JSON.stringify(credentials),
+        }); //调用后端post请求
+
+        const responseData = await directResponse.json(); //对象转化为json数据
+        console.log("===登录响应数据===", responseData);
+        //注册信息，包括用户id 名字，邮件，和token
         if (responseData.token) {
-          authStore.setToken(responseData.token)
+          authStore.setToken(responseData.token); //设置token
           authStore.setUser({
             id: responseData.user_id,
             username: responseData.username,
-            email: responseData.email
-          })
-          
-          ElMessage.success('登录成功')
+            email: responseData.email,
+          });
+
+          ElMessage.success("登录成功");
           // 获取数据文件列表
-          fetchDataFiles()
+          fetchDataFiles();
         } else {
-          console.error('登录失败:', responseData)
-          ElMessage.error('登录失败: ' + (responseData.error || '请查看控制台获取详细信息'))
+          console.error("登录失败:", responseData);
+          ElMessage.error(
+            "登录失败: " + (responseData.error || "请查看控制台获取详细信息")
+          );
         }
       } catch (error) {
-        console.error('===登录详细错误===', error)
-        ElMessage.error('登录失败: ' + (error.message || '用户名或密码错误，请查看控制台'))
+        console.error("===登录详细错误===", error);
+        ElMessage.error(
+          "登录失败: " + (error.message || "用户名或密码错误，请查看控制台")
+        );
       } finally {
-        loading.value = false
+        loading.value = false;
       }
     }
-  })
-}
+  });
+};
 
 // 处理注册
 const handleRegister = async (formEl) => {
-  if (!formEl) return
-  
+  if (!formEl) return;
+
   await formEl.validate(async (valid) => {
     if (valid) {
-      loading.value = true
-      
+      loading.value = true;
+
       // 直接添加调试输出
       const userData = {
         username: registerForm.value.username,
         email: registerForm.value.email,
         password: registerForm.value.password,
-        first_name: '',
-        last_name: ''
-      }
-      console.log('===准备发送注册请求===', userData)
-      
+        first_name: "",
+        last_name: "",
+      };
+      console.log("===准备发送注册请求===", userData);
+
       try {
         // 使用更直接的axios调用
-        const directResponse = await fetch('http://localhost:8000/api/register/', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(userData)
-        })
-        
-        const responseData = await directResponse.json()
-        console.log('===注册响应数据===', responseData)
-        
+        const directResponse = await fetch(
+          "http://localhost:8000/api/register/",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(userData),
+          }
+        );
+
+        const responseData = await directResponse.json();
+        console.log("===注册响应数据===", responseData);
+
         if (responseData.token) {
-          authStore.setToken(responseData.token)
-          authStore.setUser(responseData.user)
-          
-          ElMessage.success('注册成功')
+          authStore.setToken(responseData.token);
+          authStore.setUser(responseData.user);
+
+          ElMessage.success("注册成功");
           // 获取数据文件列表
-          fetchDataFiles()
+          fetchDataFiles();
         } else {
-          console.error('注册失败:', responseData)
-          ElMessage.error('注册失败: ' + (responseData.error || '请查看控制台获取详细信息'))
+          console.error("注册失败:", responseData);
+          ElMessage.error(
+            "注册失败: " + (responseData.error || "请查看控制台获取详细信息")
+          );
         }
       } catch (error) {
-        console.error('===注册详细错误===', error)
-        ElMessage.error('注册失败: ' + (error.message || '未知错误，请查看控制台'))
+        console.error("===注册详细错误===", error);
+        ElMessage.error(
+          "注册失败: " + (error.message || "未知错误，请查看控制台")
+        );
       } finally {
-        loading.value = false
+        loading.value = false;
       }
     }
-  })
-}
+  });
+};
 
 // 登出
 const handleLogout = () => {
-  authStore.logout()
-  ElMessage.success('已退出登录')
-}
+  authStore.logout();
+  ElMessage.success("已退出登录");
+};
 
 // 获取文件列表
 const fetchDataFiles = async () => {
   try {
-    loading.value = true
-    const response = await getDataFiles()
-    dataFiles.value = response.data || []
+    loading.value = true;
+    const response = await getDataFiles();
+    dataFiles.value = response.data || [];
   } catch (error) {
-    console.error('获取文件列表失败:', error)
+    console.error("获取文件列表失败:", error);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 // 跳转到功能页面
 const navigateTo = (path) => {
-  router.push(path)
-}
+  router.push(path); //
+};
 
 // 处理登录表单提交
 const handleLoginSubmit = async (event) => {
-  loading.value = true
-  
+  loading.value = true;
+
   // 直接添加调试输出
   const credentials = {
     username: loginForm.value.username,
-    password: loginForm.value.password
-  }
-  console.log('===准备发送登录请求===', credentials)
-  
+    password: loginForm.value.password,
+  };
+  console.log("===准备发送登录请求===", credentials);
+
   try {
     // 使用更直接的fetch调用
-    const directResponse = await fetch('http://localhost:8000/api/login/', {
-      method: 'POST',
+    const directResponse = await fetch("http://localhost:8000/api/login/", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(credentials)
-    })
-    
-    const responseData = await directResponse.json()
-    console.log('===登录响应数据===', responseData)
-    
+      body: JSON.stringify(credentials),
+    });
+
+    const responseData = await directResponse.json();
+    console.log("===登录响应数据===", responseData);
+
     if (responseData.token) {
-      authStore.setToken(responseData.token)
+      authStore.setToken(responseData.token);
       authStore.setUser({
         id: responseData.user_id,
         username: responseData.username,
-        email: responseData.email
-      })
-      
-      ElMessage.success('登录成功')
+        email: responseData.email,
+      });
+
+      ElMessage.success("登录成功");
       // 获取数据文件列表
-      fetchDataFiles()
+      fetchDataFiles(); //加载文件
     } else {
-      console.error('登录失败:', responseData)
-      ElMessage.error('登录失败: ' + (responseData.error || '请查看控制台获取详细信息'))
+      console.error("登录失败:", responseData);
+      ElMessage.error(
+        "登录失败: " + (responseData.error || "请查看控制台获取详细信息")
+      );
     }
   } catch (error) {
-    console.error('===登录详细错误===', error)
-    ElMessage.error('登录失败: ' + (error.message || '用户名或密码错误，请查看控制台'))
+    console.error("===登录详细错误===", error);
+    ElMessage.error(
+      "登录失败: " + (error.message || "用户名或密码错误，请查看控制台")
+    );
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 // 处理注册表单提交
 const handleRegisterSubmit = async (event) => {
   // 验证密码是否一致
   if (registerForm.value.password !== registerForm.value.confirmPassword) {
-    ElMessage.error('两次输入的密码不一致')
-    return
+    ElMessage.error("两次输入的密码不一致");
+    return;
   }
-  
-  loading.value = true
-  
+  loading.value = true;
   // 直接添加调试输出
   const userData = {
     username: registerForm.value.username,
     email: registerForm.value.email,
     password: registerForm.value.password,
-    first_name: '',
-    last_name: ''
-  }
-  console.log('===准备发送注册请求===', userData)
-  
+    first_name: "",
+    last_name: "",
+  };
+  console.log("===准备发送注册请求===", userData);
   try {
     // 使用更直接的fetch调用
-    const directResponse = await fetch('http://localhost:8000/api/register/', {
-      method: 'POST',
+    const directResponse = await fetch("http://localhost:8000/api/register/", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(userData)
-    })
-    
-    const responseData = await directResponse.json()
-    console.log('===注册响应数据===', responseData)
-    
+      body: JSON.stringify(userData),
+    });
+
+    const responseData = await directResponse.json();
+    console.log("===注册响应数据===", responseData);
     if (responseData.token) {
-      authStore.setToken(responseData.token)
-      authStore.setUser(responseData.user)
-      
-      ElMessage.success('注册成功')
+      authStore.setToken(responseData.token);
+      authStore.setUser(responseData.user);
+      ElMessage.success("注册成功");
       // 获取数据文件列表
-      fetchDataFiles()
+      fetchDataFiles();
     } else {
-      console.error('注册失败:', responseData)
-      ElMessage.error('注册失败: ' + (responseData.error || '请查看控制台获取详细信息'))
+      console.error("注册失败:", responseData);
+      ElMessage.error(
+        "注册失败: " + (responseData.error || "请查看控制台获取详细信息")
+      );
     }
   } catch (error) {
-    console.error('===注册详细错误===', error)
-    ElMessage.error('注册失败: ' + (error.message || '未知错误，请查看控制台'))
+    console.error("===注册详细错误===", error);
+    ElMessage.error("注册失败: " + (error.message || "未知错误，请查看控制台"));
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 onMounted(() => {
   if (authStore.isAuthenticated) {
-    fetchDataFiles()
+    fetchDataFiles();
   }
-})
+});
 </script>
 
 <template>
@@ -314,112 +321,128 @@ onMounted(() => {
               <h2>交互式数据分析系统</h2>
               <div v-if="isLoggedIn" class="user-info">
                 <span>欢迎，{{ username }}</span>
-                <el-button type="danger" size="small" @click="handleLogout">退出登录</el-button>
+                <el-button type="danger" size="small" @click="handleLogout()"
+                  >退出登录</el-button
+                >
               </div>
             </div>
           </template>
-          
+
           <!-- 未登录状态 -->
           <div v-if="!isLoggedIn" class="login-container">
             <div class="login-tabs">
               <div class="tab-header">
-                <button 
-                  :class="{ active: activeTab === 'login' }" 
-                  @click="activeTab = 'login'">登录</button>
-                <button 
-                  :class="{ active: activeTab === 'register' }" 
-                  @click="activeTab = 'register'">注册</button>
+                <button
+                  :class="{ active: activeTab === 'login' }"
+                  @click="activeTab = 'login'"
+                >
+                  登录
+                </button>
+                <button
+                  :class="{ active: activeTab === 'register' }"
+                  @click="activeTab = 'register'"
+                >
+                  注册
+                </button>
               </div>
-              
+
               <!-- 登录表单 -->
               <div v-if="activeTab === 'login'" class="tab-content">
-                <form @submit.prevent="handleLoginSubmit">
+                <form @submit.prevent="handleLoginSubmit()">
                   <div class="form-group">
                     <label for="login-username">用户名</label>
-                    <input 
+                    <input
                       id="login-username"
-                      type="text" 
-                      v-model="loginForm.username" 
-                      placeholder="请输入用户名" 
-                      required />
+                      type="text"
+                      v-model="loginForm.username"
+                      placeholder="请输入用户名"
+                      required
+                    />
                   </div>
                   <div class="form-group">
                     <label for="login-password">密码</label>
-                    <input 
+                    <input
                       id="login-password"
-                      type="password" 
-                      v-model="loginForm.password" 
-                      placeholder="请输入密码" 
-                      required />
+                      type="password"
+                      v-model="loginForm.password"
+                      placeholder="请输入密码"
+                      required
+                    />
                   </div>
                   <div class="form-group">
-                    <button 
-                      type="submit" 
+                    <button
+                      type="submit"
                       class="submit-button"
-                      :disabled="loading">
-                      {{ loading ? '登录中...' : '登录' }}
+                      :disabled="loading"
+                    >
+                      {{ loading ? "登录中..." : "登录" }}
                     </button>
                   </div>
                 </form>
               </div>
-              
+
               <!-- 注册表单 -->
               <div v-if="activeTab === 'register'" class="tab-content">
                 <form @submit.prevent="handleRegisterSubmit">
                   <div class="form-group">
                     <label for="register-username">用户名</label>
-                    <input 
+                    <input
                       id="register-username"
-                      type="text" 
-                      v-model="registerForm.username" 
-                      placeholder="请输入用户名" 
-                      required />
+                      type="text"
+                      v-model="registerForm.username"
+                      placeholder="请输入用户名"
+                      required
+                    />
                   </div>
                   <div class="form-group">
                     <label for="register-email">邮箱</label>
-                    <input 
+                    <input
                       id="register-email"
-                      type="email" 
-                      v-model="registerForm.email" 
-                      placeholder="请输入邮箱" 
-                      required />
+                      type="email"
+                      v-model="registerForm.email"
+                      placeholder="请输入邮箱"
+                      required
+                    />
                   </div>
                   <div class="form-group">
                     <label for="register-password">密码</label>
-                    <input 
+                    <input
                       id="register-password"
-                      type="password" 
-                      v-model="registerForm.password" 
-                      placeholder="请输入密码" 
-                      required 
-                      minlength="6" />
+                      type="password"
+                      v-model="registerForm.password"
+                      placeholder="请输入密码"
+                      required
+                      minlength="6"
+                    />
                   </div>
                   <div class="form-group">
                     <label for="register-confirm-password">确认密码</label>
-                    <input 
+                    <input
                       id="register-confirm-password"
-                      type="password" 
-                      v-model="registerForm.confirmPassword" 
-                      placeholder="请确认密码" 
-                      required />
+                      type="password"
+                      v-model="registerForm.confirmPassword"
+                      placeholder="请确认密码"
+                      required
+                    />
                   </div>
                   <div class="form-group">
-                    <button 
-                      type="submit" 
+                    <button
+                      type="submit"
                       class="submit-button"
-                      :disabled="loading">
-                      {{ loading ? '注册中...' : '注册' }}
+                      :disabled="loading"
+                    >
+                      {{ loading ? "注册中..." : "注册" }}
                     </button>
                   </div>
                 </form>
               </div>
             </div>
           </div>
-          
+
           <!-- 已登录状态 -->
           <div v-else class="card-content">
             <h3>系统功能</h3>
-            
+
             <el-row :gutter="20" class="feature-cards">
               <el-col :span="8">
                 <el-card shadow="hover" @click="navigateTo('/data-management')">
@@ -430,19 +453,24 @@ onMounted(() => {
                   </div>
                 </el-card>
               </el-col>
-              
+
               <el-col :span="8">
                 <el-card shadow="hover" @click="navigateTo('/data-analysis')">
                   <div class="feature-card">
-                    <el-icon :size="48" color="#67C23A"><DataAnalysis /></el-icon>
+                    <el-icon :size="48" color="#67C23A"
+                      ><DataAnalysis
+                    /></el-icon>
                     <h3>数据分析</h3>
                     <p>聚类、回归、分类和降维分析</p>
                   </div>
                 </el-card>
               </el-col>
-              
+
               <el-col :span="8">
-                <el-card shadow="hover" @click="navigateTo('/data-visualization')">
+                <el-card
+                  shadow="hover"
+                  @click="navigateTo('/data-visualization')"
+                >
                   <div class="feature-card">
                     <el-icon :size="48" color="#E6A23C"><PieChart /></el-icon>
                     <h3>数据可视化</h3>
@@ -451,17 +479,29 @@ onMounted(() => {
                 </el-card>
               </el-col>
             </el-row>
-            
+
             <!-- 最近文件列表 -->
             <div v-if="dataFiles.length > 0" class="recent-files">
               <h3>最近上传的文件</h3>
-              <el-table :data="dataFiles.slice(0, 5)" border style="width: 100%">
+              <el-table
+                :data="dataFiles.slice(0, 5)"
+                border
+                style="width: 100%"
+              >
                 <el-table-column prop="name" label="文件名" />
                 <el-table-column prop="file_type" label="文件类型" />
-                <el-table-column prop="created_at" label="上传时间" width="180" />
+                <el-table-column
+                  prop="created_at"
+                  label="上传时间"
+                  width="180"
+                />
                 <el-table-column label="操作" width="180">
-                  <template #default="scope">
-                    <el-button size="small" @click="navigateTo('/data-management')">查看</el-button>
+                  <template>
+                    <el-button
+                      size="small"
+                      @click="navigateTo('/data-management')"
+                      >查看</el-button
+                    >
                   </template>
                 </el-table-column>
               </el-table>
@@ -518,7 +558,7 @@ onMounted(() => {
 }
 
 .tab-header button.active {
-  background-color: #409EFF;
+  background-color: #409eff;
   color: #fff;
 }
 
@@ -549,7 +589,7 @@ onMounted(() => {
 .submit-button {
   width: 100%;
   padding: 12px;
-  background-color: #409EFF;
+  background-color: #409eff;
   color: white;
   border: none;
   border-radius: 4px;
