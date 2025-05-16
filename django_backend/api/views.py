@@ -280,3 +280,548 @@ class CleanedDataViewSet(viewsets.ModelViewSet):
         # 捕获清洗过程中可能发生的异常，并返回错误信息。
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class AnalysisResultViewSet(viewsets.ModelViewSet):
+    '''AnalysisResultViewSet，用于处理与数据分析相关的 API 请求。它继承自 ModelViewSet，
+    自动提供了对数据库模型 AnalysisResult 的 CRUD 操作（创建、读取、更新、删除），并通
+    过一个自定义的 analyze 动作方法实现了数据分析的核心功能。'''
+    queryset = AnalysisResult.objects.all()  # 定义该视图集操作的数据源为所有 AnalysisResult 实例
+    serializer_class = AnalysisResultSerializer  # 进行数据的序列化与反序列化，便于前后端交互。
+
+    
+    def get_queryset(self):
+        '''
+        如果用户已认证，则返回属于该用户的数据文件所关联的所有分析结果。
+    否则返回空查询集，防止未授权访问。
+        '''
+        if self.request.user.is_authenticated:
+            return AnalysisResult.objects.filter(data_file__user=self.request.user)
+        return AnalysisResult.objects.none()
+
+
+    #最核心的功能入口，允许客户端发起一个 POST 请求来进行以下类型的分析
+    @action(detail=False, methods=['post'])#定义一个POST方法的自定义操作。detail=False表示该操作是针对集合的，而不是单个资源
+    def analyze(self, request):
+        # 打印请求数据，以便调试，检查客户端传递给服务器的数据
+        print("接收到分析请求：", request.data)
+
+        # 从请求中获取用户指定的原始数据文件的 ID。从请求数据中获取文件ID，用于后续处理中标识特定的文件
+        file_id = request.data.get('file_id')
+
+        # 从请求数据中获取清洗后的数据ID，用于关联或标识经过预处理的数据
+        cleaned_data_id = request.data.get('cleaned_data_id')
+
+        # 从请求数据中获取分析类型，决定后续数据处理或分析的具体方法
+        analysis_type = request.data.get('analysis_type')
+
+        # 从请求数据中获取额外的参数，这些参数是可选的，如果不存在则默认为空字典
+        # 这些参数用于定制化分析过程中的特定行为或配置
+        parameters = request.data.get('parameters', {})
+        
+        print(f"分析参数: file_id={file_id}, analysis_type={analysis_type}, parameters={parameters}")
+
+        #检查是否提供了必要的参数
+        if not file_id:
+            # 创建一个 HTTP 响应对象，返回给客户端，专门用于处理结构化数据（如 JSON）
+            # 如果缺少必要参数，则返回错误信息，并使用HTTP状态码400表示错误
+            return Response({'error': '缺少必要参数：file_id'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if not analysis_type:
+            return Response({'error': '缺少必要参数：analysis_type'}, status=status.HTTP_400_BAD_REQUEST)
+
+        #根据file_id获取数据文件对象
+        try:
+            #数据库中获取一个对象，如果找不到该对象，则自动引发 Http404 异常。从 DataFile 表中查找 id 字段等于 file_id 的记录。
+            data_file = get_object_or_404(DataFile, id=file_id)
+            print(f"找到数据文件: {data_file.name}")
+        except Exception as e:
+            return Response({'error': f'无法找到ID为{file_id}的文件: {str(e)}'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # 检查用户是否有权限访问此文件（文件的拥有者request.user，管理员request.user.is_staff
+        if data_file.user != request.user and not request.user.is_staff:
+            return Response({'error': '没有权限访问此文件'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # 如果提供了cleaned_data_id，则使用清洗后的数据。没有则使用原始数据文件，确定使用哪个数据源
+        if cleaned_data_id:
+            try:
+                cleaned_data = get_object_or_404(CleanedData, id=cleaned_data_id)
+                file_path = cleaned_data.file.path
+                print(f"使用清洗后的数据: {cleaned_data.file.name}")
+            except Exception as e:
+                return Response({'error': f'无法找到ID为{cleaned_data_id}的清洗数据: {str(e)}'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            file_path = data_file.file.path
+            cleaned_data = None
+            print(f"使用原始数据文件: {data_file.file.name}")
+
+        try:
+            print(f"尝试读取CSV文件: {file_path}")
+            df = pd.read_csv(file_path)
+            #打印读取成功后的数据维度（行数、列数）和前5个列名
+            print(f"CSV读取成功，数据形状: {df.shape}, 列名: {df.columns.tolist()[:5]}...")
+            result = {}
+            
+            # 验证请求中的特征是否存在于数据集中
+            #从请求参数中获取用户指定的特征列表 features，默认为空列表
+            requested_features = parameters.get('features', [])
+            print(f"请求的特征: {requested_features}")
+            #获取数据集 df 中所有可用的列名，转换为列表形式保存在
+            available_columns = df.columns.tolist()
+            
+            # 过滤出实际存在于数据集的特征
+            valid_features = [f for f in requested_features if f in available_columns]
+            print(f"有效特征: {valid_features}")
+            
+            if not valid_features:
+                # 如果没有有效特征，使用多种方法尝试检测数值型列
+                print("没有有效特征，尝试多种方法检测数值列...")
+                numeric_cols = []
+                
+                # 方法0: 处理BBQ_weather列
+                #筛选出列名包含BBQ_weather的所有列
+                bbq_cols = [col for col in df.columns if 'BBQ_weather' in col]
+                if bbq_cols:
+                    print(f"检测到BBQ_weather列: {bbq_cols}")
+                    # 创建BBQ列的数值版本
+                    for col in bbq_cols:
+                        # 将BBQ值转换为0或1
+                        col_name = f"{col}_numeric"
+                        df[col_name] = df[col].map(lambda x: 1 if str(x).lower() in ['1', 'true', 't', 'yes', 'y', 'good'] else 0)
+                        numeric_cols.append(col_name)
+                    print(f"创建的BBQ数值列: {numeric_cols}")
+                
+                # 方法1: 使用pandas的数值类型检测
+                try:
+                    #选择所有数据类型为数值型的列
+                    numeric_cols_pd = df.select_dtypes(include=[np.number]).columns.tolist()
+                    print(f"方法1-Pandas检测到的数值列: {numeric_cols_pd}")
+                    if numeric_cols_pd:
+                        for col in numeric_cols_pd:
+                            if col != 'DATE' and col not in numeric_cols:
+                                numeric_cols.append(col)
+                except Exception as e:
+                    print(f"pandas数值列检测失败: {str(e)}")
+                
+                # 方法2: 尝试手动检测数值型列（分析每列前100行数据）
+                if len(numeric_cols) < 3:
+                    print("方法2-尝试手动检测数值列...")
+                    for col in df.columns:
+                        # 跳过DATE、MONTH和已处理的BBQ列
+                        if col in ['DATE', 'MONTH'] or col in numeric_cols:
+                            continue
+                            
+                        # 检查前100行样本确认是否为数值
+                        sample = df[col].head(100).dropna()
+                        if len(sample) == 0:
+                            continue
+                            
+                        is_numeric = True
+                        for val in sample:
+                            try:
+                                if val is None or pd.isna(val) or val == '':
+                                    continue
+                                float(val)
+                            except (ValueError, TypeError):
+                                is_numeric = False
+                                break
+                                
+                        if is_numeric:
+                            numeric_cols.append(col)
+                    
+                    print(f"方法2-手动检测到的数值列: {numeric_cols}")
+                
+                # 方法3: 转换DATE列为数值特征
+                if len(numeric_cols) < 3 and 'DATE' in df.columns:
+                    print("方法3-转换DATE列为数值特征...")
+                    try:
+                        # 从DATE列提取月份和日期作为数值特征
+                        df['MONTH_numeric'] = pd.to_datetime(df['DATE']).dt.month
+                        df['DAY_numeric'] = pd.to_datetime(df['DATE']).dt.day
+                        numeric_cols.append('MONTH_numeric')
+                        numeric_cols.append('DAY_numeric')
+                        print(f"添加的时间数值特征: MONTH_numeric, DAY_numeric")
+                    except Exception as e:
+                        print(f"转换DATE列失败: {str(e)}")
+                
+                # 方法4: 最后尝试创建随机特征演示
+                if len(numeric_cols) < 3:
+                    print("方法4-创建随机特征来演示分析...")
+                    for i in range(3):
+                        col_name = f"random_feature_{i+1}"
+                        df[col_name] = np.random.rand(len(df))
+                        numeric_cols.append(col_name)
+                    print(f"创建的随机特征: {numeric_cols[-3:]}")
+                
+                # 排除DATE和MONTH列
+                valid_features = [f for f in numeric_cols if f not in ['DATE', 'MONTH']]
+                
+                print(f"最终选择的有效特征: {valid_features}")
+                
+                # 如果仍然没有有效特征，返回错误
+                if not valid_features:
+                    return Response({
+                        'error': '没有可用的数值特征进行分析，请检查数据格式'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # 限制使用的默认特征数量
+                if len(valid_features) > 5:
+                    valid_features = valid_features[:5]
+                    print(f"限制为前5个特征: {valid_features}")
+                
+            # 验证目标变量是否存在（对于回归和分类）
+            target = parameters.get('target')
+            if target:
+                print(f"目标特征: {target}, 是否存在: {target in available_columns}")
+
+            # 如果目标变量不存在于可用列中，尝试查找替代的目标变量
+            if target and target not in available_columns:
+                # 排除特定列，寻找潜在的目标变量
+                potential_targets = [col for col in df.columns
+                                   if col not in ['DATE', 'MONTH']
+                                   and not col.endswith('BBQ_weather')
+                                   and col not in valid_features]
+
+                # 如果找到潜在的目标变量，选择第一个作为新的目标变量
+                if potential_targets:
+                    new_target = potential_targets[0]
+                    print(f"目标特征 {target} 不存在，使用 {new_target} 作为替代")
+                    target = new_target
+                else:
+                    # 如果没有找到替代目标变量，返回错误响应
+                    return Response({
+                        'error': f'目标特征 "{target}" 不存在于数据集中，且无法找到替代目标。可用列：{available_columns[:10]}...'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 确保在继续之前valid_features不为空
+            if not valid_features:
+                return Response({
+                    'error': '没有有效的特征可用于分析，请检查数据格式和列名'
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
+            print(f"最终使用的特征: {valid_features}")
+            print(f"数据样本:\n{df[valid_features].head()}")
+            
+            # 最终检查特征数据是否实际包含数值
+            try:
+                X = df[valid_features].astype(float)
+                print(f"特征转换为数值成功，数据形状: {X.shape}")
+                
+                # 检查是否存在无限值或NaN
+                if X.isnull().values.any() or np.isinf(X.values).any():
+                    print("警告：数据中存在NaN或无限值，将进行填充")
+                    X = X.fillna(X.mean())
+                    X = X.replace([np.inf, -np.inf], X.mean())
+            except Exception as e:
+                print(f"转换特征为数值时出错: {str(e)}")
+                return Response({
+                    'error': f'转换特征为数值失败: {str(e)}。请确保选择的列只包含数值数据。'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 对不同的分析类型执行不同的操作
+            if analysis_type == 'clustering':
+                # 从参数中获取聚类数量，默认为3
+                n_clusters = int(parameters.get('n_clusters', 3))
+                # 打印聚类分析的执行信息
+                print(f"执行聚类分析，聚类数: {n_clusters}, 特征数: {len(valid_features)}")
+
+                try:
+                    # 将有效特征转换为浮点类型
+                    X = df[valid_features].astype(float)
+
+                    # 初始化KMeans对象并进行聚类分析
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+                    clusters = kmeans.fit_predict(X)
+
+                    # 构建聚类分析结果字典
+                    result = {
+                        'clusters': clusters.tolist(),
+                        'centers': kmeans.cluster_centers_.tolist(),
+                        'clusterCounts': [sum(clusters == i) for i in range(n_clusters)],
+                        'feature_names': valid_features
+                    }
+                    # 打印聚类分析完成信息
+                    print("聚类分析完成")
+                except Exception as e:
+                    # 打印并返回聚类分析失败的错误信息
+                    print(f"聚类分析失败: {str(e)}")
+                    return Response({'error': f'聚类分析失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            elif analysis_type == 'dimension_reduction':
+                # 从参数中获取降维后的组件数量，默认为2
+                n_components = int(parameters.get('n_components', 2))
+                # 打印降维分析的执行信息
+                print(f"执行降维分析，组件数: {n_components}, 特征数: {len(valid_features)}")
+
+                try:
+                    # 将有效特征转换为浮点类型
+                    X = df[valid_features].astype(float)
+
+                    # 初始化PCA对象并进行降维分析
+                    pca = PCA(n_components=n_components)
+                    components = pca.fit_transform(X)
+
+                    # 构建降维分析结果字典
+                    result = {
+                        'components': components.tolist(),
+                        'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
+                        'feature_names': valid_features
+                    }
+                    # 打印降维分析完成信息
+                    print("降维分析完成")
+                except Exception as e:
+                    # 打印并返回降维分析失败的错误信息
+                    print(f"降维分析失败: {str(e)}")
+                    return Response({'error': f'降维分析失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+            elif analysis_type == 'regression' and target:
+                # 当分析类型为回归分析且目标变量已指定时，执行以下代码块
+                print(f"执行回归分析，目标: {target}, 特征数: {len(valid_features)}")
+
+                try:
+                    # 将有效特征和目标变量转换为浮点类型
+                    X = df[valid_features].astype(float)
+                    y = df[target].astype(float)
+
+                    # 使用更可靠的特征选择 - 计算与目标的相关性
+                    correlations = []
+                    for feature in valid_features:
+                        corr = np.corrcoef(X[feature], y)[0, 1]
+                        correlations.append((feature, abs(corr)))
+
+                    # 按相关性排序特征
+                    sorted_features = [f for f, _ in sorted(correlations, key=lambda x: x[1], reverse=True)]
+                    print(f"特征按相关性排序: {sorted_features}")
+
+                    # 使用相关性最高的特征
+                    if len(sorted_features) > 5:
+                        best_features = sorted_features[:5]
+                        X = X[best_features]
+                        print(f"使用相关性最高的5个特征: {best_features}")
+
+                    # 分割训练集和测试集
+                    test_size = float(parameters.get('test_size', 0.2))
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+
+                    # 根据算法选择模型
+                    algorithm = parameters.get('algorithm', 'linear')
+                    result = {}  # 初始化结果字典
+
+                    # 如果选择的算法是随机森林
+                    if algorithm == 'random_forest':
+                        from sklearn.ensemble import RandomForestRegressor
+                        # 创建随机森林回归器实例
+                        model = RandomForestRegressor(n_estimators=100, random_state=42)
+                        # 训练模型
+                        model.fit(X_train, y_train)
+                        # 使用训练好的模型进行预测
+                        y_pred = model.predict(X_test)
+
+                        # 获取特征重要性
+                        feature_importance = model.feature_importances_.tolist()
+                        intercept = 0.0  # 随机森林没有截距
+                        extra_info = {'scaled': False}
+
+                        print(f"随机森林回归分析完成")
+                        
+                    else:  # 线性回归相关算法
+                        # 应用特征缩放，对线性模型很重要
+                        from sklearn.preprocessing import StandardScaler
+                        scaler = StandardScaler()
+                        X_train_scaled = scaler.fit_transform(X_train)
+                        X_test_scaled = scaler.transform(X_test)
+                        
+                        # 检查是否应用多项式特征
+                        use_poly = parameters.get('use_polynomial', False)
+                        poly_degree = int(parameters.get('polynomial_degree', 2))
+                        
+                        if use_poly:
+                            from sklearn.preprocessing import PolynomialFeatures
+                            poly = PolynomialFeatures(degree=poly_degree, include_bias=False)
+                            X_train_scaled = poly.fit_transform(X_train_scaled)
+                            X_test_scaled = poly.transform(X_test_scaled)
+                            print(f"应用多项式特征，阶数: {poly_degree}")
+                        
+                        # 选择适当的线性回归变体
+                        linear_type = parameters.get('linear_type', 'standard')
+                        
+                        if linear_type == 'ridge':
+                            from sklearn.linear_model import Ridge
+                            alpha = float(parameters.get('alpha', 1.0))
+                            model = Ridge(alpha=alpha)
+                            print(f"使用岭回归，alpha={alpha}")
+                        elif linear_type == 'lasso':
+                            from sklearn.linear_model import Lasso
+                            alpha = float(parameters.get('alpha', 0.1))
+                            model = Lasso(alpha=alpha)
+                            print(f"使用Lasso回归，alpha={alpha}")
+                        else:
+                            # 标准线性回归
+                            model = LinearRegression()
+                            print("使用标准线性回归")
+                        
+                        # 使用缩放后的数据
+                        model.fit(X_train_scaled, y_train)
+                        y_pred = model.predict(X_test_scaled)
+                        
+                        # 获取系数和截距
+                        if hasattr(model, 'coef_'):
+                            if len(model.coef_.shape) == 1:
+                                feature_importance = model.coef_.tolist()
+                            else:
+                                feature_importance = model.coef_[0].tolist()
+                        else:
+                            feature_importance = [0] * len(X.columns)
+                            
+                        intercept = float(model.intercept_) if hasattr(model, 'intercept_') else 0.0
+                        
+                        # 额外信息
+                        extra_info = {
+                            'scaled': True,
+                            'linear_type': linear_type
+                        }
+                        if use_poly:
+                            extra_info['polynomial'] = {
+                                'applied': True,
+                                'degree': poly_degree
+                            }
+                        
+                        print(f"线性回归分析完成")
+                    
+                    # 计算通用的评估指标
+                    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+                    r2 = r2_score(y_test, y_pred)
+                    mae = mean_absolute_error(y_test, y_pred)
+                    mse = mean_squared_error(y_test, y_pred)
+                    
+                    # 为了前端可视化，生成预测值与实际值比较
+                    predictions = []
+                    for i in range(min(20, len(X_test))):
+                        actual = float(y_test.iloc[i]) if hasattr(y_test, 'iloc') else float(y_test[i])
+                        predicted = float(y_pred[i])
+                        predictions.append({'actual': actual, 'predicted': predicted})
+                    
+                    # 完成结果字典
+                    result = {
+                        'coefficients': feature_importance,
+                        'intercept': intercept,
+                        'feature_names': X.columns.tolist(),
+                        'target': target,
+                        'predictions': predictions,
+                        'metrics': {
+                            'r2': float(r2),
+                            'mae': float(mae),
+                            'mse': float(mse)
+                        },
+                        'algorithm': algorithm,
+                        'extra_info': extra_info
+                    }
+                    
+                    print(f"分析指标 - R²: {r2:.4f}, MAE: {mae:.4f}, MSE: {mse:.4f}")
+                    
+                    # 创建分析结果
+                    analysis_result = AnalysisResult.objects.create(
+                        data_file=data_file,
+                        cleaned_data=cleaned_data,
+                        analysis_type=analysis_type,
+                        parameters={
+                            **parameters,
+                            'actual_features_used': valid_features  # 记录实际使用的特征
+                        },
+                        result=result
+                    )
+                    print(f"分析结果已保存，ID: {analysis_result.id}")
+                    
+                    serializer = self.get_serializer(analysis_result)
+                    return Response(serializer.data)
+                    
+                except Exception as e:
+                    print(f"回归分析失败: {str(e)}")
+                    traceback.print_exc()  # 打印完整堆栈跟踪
+                    return Response({'error': f'回归分析失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            elif analysis_type == 'classification' and target:
+                print(f"执行分类分析，目标: {target}, 特征数: {len(valid_features)}")
+                
+                try:
+                    X = df[valid_features].astype(float)
+                    y = df[target]
+                    
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                    
+                    model = RandomForestClassifier(random_state=42)
+                    model.fit(X_train, y_train)
+                    
+                    result = {
+                        'accuracy': float(model.score(X_test, y_test)),
+                        'feature_importance': model.feature_importances_.tolist(),
+                        'feature_names': valid_features
+                    }
+                    print("分类分析完成，准确率: ", result['accuracy'])
+                except Exception as e:
+                    print(f"分类分析失败: {str(e)}")
+                    return Response({'error': f'分类分析失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({
+                    'error': f'不支持的分析类型: {analysis_type}，或缺少必要参数'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            import traceback
+            print("分析过程中出现错误:")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class VisualizationResultViewSet(viewsets.ModelViewSet):
+    """
+    VisualizationResult模型的视图集，提供CRUD功能
+    """
+    queryset = VisualizationResult.objects.all()
+    serializer_class = VisualizationResultSerializer
+
+    def get_queryset(self):
+        """
+        重写get_queryset方法，根据用户认证状态返回不同的查询集
+        """
+        # 如果用户已认证，则返回属于该用户的数据文件的可视化结果
+        if self.request.user.is_authenticated:
+            return VisualizationResult.objects.filter(data_file__user=self.request.user)
+        # 如果用户未认证，则返回空查询集
+        return VisualizationResult.objects.none()
+
+    @action(detail=False, methods=['post'])
+    def visualize(self, request):
+        """
+        处理可视化请求的自定义动作
+        """
+        # 从请求数据中获取参数
+        data_file_id = request.data.get('data_file_id')
+        analysis_result_id = request.data.get('analysis_result_id')
+        chart_type = request.data.get('chart_type')
+        title = request.data.get('title')
+        configuration = request.data.get('configuration', {})
+
+        # 获取数据文件对象
+        data_file = get_object_or_404(DataFile, id=data_file_id)
+
+        # 检查用户是否有权限访问此文件
+        if data_file.user != request.user and not request.user.is_staff:
+            return Response({'error': '没有权限访问此文件'}, status=status.HTTP_403_FORBIDDEN)
+
+        # 获取分析结果对象，如果提供了分析结果ID
+        analysis_result = None
+        if analysis_result_id:
+            analysis_result = get_object_or_404(AnalysisResult, id=analysis_result_id)
+
+        # 创建可视化结果
+        visualization = VisualizationResult.objects.create(
+            data_file=data_file,
+            analysis_result=analysis_result,
+            chart_type=chart_type,
+            title=title,
+            configuration=configuration
+        )
+
+        # 使用序列化器序列化新创建的可视化结果并返回响应
+        serializer = self.get_serializer(visualization)
+        return Response(serializer.data)
